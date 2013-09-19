@@ -2,7 +2,12 @@
 #+Author: Bob Cotton
 #+Email: bob.cotton@gmail.com
 #+REVEAL_HLEVEL: 1
+#+REVEAL_ROOT: ./reveal.js
 #+OPTIONS: num:nil :toc:nil
+#+OPTIONS: reveal_width:1200 reveal_height:800
+#+REVEAL_MARGIN: 0.1
+#+REVEAL_MIN_SCALE: 0.5
+#+REVEAL_MAX_SCALE: 2.5
 
 * About Me
 - Principal Engineer at Rally Software 
@@ -10,12 +15,11 @@
   - =@bob_cotton=
 * Storm
 - A Framework for Distributed and Fault-tolorant Realtime Computation
-** Into to Storm
 - So called "Hadoop for Streaming"
 ** Core Concepts
 - Spouts
 - Bolts
-- Topologies
+- Topologies (Collection of Spouts and bolts)
 ** Basic Topology
 #+BEGIN_SRC dot :file basic-topology.jpg 
 digraph G  {
@@ -69,6 +73,7 @@ Count events arriving at your website
 
 #+ATTR_REVEAL: :frag roll-in
 - Counting Events By User
+- Counting Events By Browser
 - Counting Events By User and Browser
 - Counting Events By User and Browser and Geographical Region
 - By Hour
@@ -77,20 +82,20 @@ Count events arriving at your website
 - ...
 
 * Traditional Approach
-#+ATTR_REVEAL: :frag roll-in
 - Use an RDMBS
 - Star Schema
 - OLAP Data Cube
 - Success and Profit!
+* Traditional Approach Breakdown
 - Batch - Wait for ETL
 - Big Data
-
 * Use Storm!
 
 #+BEGIN_SRC clojure
   (defbolt event-counting-bolt [event]
     (count event)
     (count-username event)
+    (count-browser event)
     (count-username-and-browser event)
     (count-username-and-browser-and-geoip event))
 #+END_SRC
@@ -100,6 +105,7 @@ Count events arriving at your website
   (defbolt event-counting-bolt [event]
     (count event)
     (count-username event)
+    (count-browser event)
     (count-username-and-browser event)
     (count-username-and-browser-and-geoip event)
     (let [timestamp (:timestamp event)]
@@ -123,13 +129,13 @@ What operating system version are they using?
 - Batch Loading
 * Datacube Core Concepts
 #+ATTR_REVEAL: :frag roll-in
-- Rollups
 - Dimensions
+- Rollups
 - Bucketers
-* Rollup
-A Rollup tracks a thing being measured. Rollups may have several dimensions.
 * Dimension
 A Dimension is a single facet of some measure.
+* Rollup
+A Rollup tracks a thing being measured. Rollups may have several dimensions.
 * Bucketer
 A Bucketer sub-divides dimensions.
 e.g. Time can be bucketed into years, months, weeks, days etc
@@ -142,7 +148,7 @@ Count the number of tweets by time, retweets, user and tags.
     (rollup))
 
   (write-value tweets-cube 1)
-  (read-value tweents-cube) => 1
+  (read-value tweets-cube) => 1
 #+END_SRC
 * Tweets Cube with a Dimension
 #+BEGIN_SRC clojure
@@ -232,14 +238,41 @@ A persisted cube is just a flattened to Key -> Value
   - Accumulo
   - Cassandra
   - DynamoDB
+* Use with Storm
+Putting it together:
+#+BEGIN_SRC dot :file complex-topology-with-storm.jpg 
+digraph G  {
+  rankdir=LR;
+  graph [bgcolor="transparent"];
+  kafka [shape=box, label = "Kafka"];
+  spout [shape=invhouse, label = "Kafka Spout"];
+  transform [label = "Transform Bolt"];
+  grouper1  [label = "Grouping Bolt"];
+  grouper2  [label = "Grouping Bolt"];
+  counter1  [label = "DataCube Bolt", color=".7 .3 1.0",style=filled];
+  counter2  [label = "DataCube Bolt", color=".7 .3 1.0",style=filled];
+  datastore [label = "HBase" color="lightblue", style=filled];
+  kafka -> spout -> transform;
+  transform -> grouper1 -> counter1;
+  transform -> grouper2 -> counter2;
+  counter1 -> datastore;
+  counter2 -> datastore;
+};
+#+END_SRC
+
+#+RESULTS:
+[[file:complex-topology-with-storm.jpg]]
+
 * This Combination Scales Well
   - Storm
+  - Datacube
   - HBase
 * Other Solutions
-- Twitters Summingbird
+- Twitter's Summingbird
 - Cascalog 2.0
 * Questions?
 * Resources
+- https://github.com/nathanmarz/storm
 - https://github.com/urbanairship/datacube
 - https://github.com/bcotton/clj-datacube
 - http://www.slideshare.net/dave_revell/nearrealtime-analytics-with-kafka-and-hbase
