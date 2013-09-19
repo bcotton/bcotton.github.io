@@ -1,0 +1,247 @@
+#+Title: Realtime Counting With Storm and Datacube
+#+Author: Bob Cotton
+#+Email: bob.cotton@gmail.com
+#+REVEAL_HLEVEL: 1
+#+OPTIONS: num:nil :toc:nil
+
+* About Me
+- Principal Engineer at Rally Software 
+  - =bcotton@rallydev.com=
+  - =@bob_cotton=
+* Storm
+- A Framework for Distributed and Fault-tolorant Realtime Computation
+** Into to Storm
+- So called "Hadoop for Streaming"
+** Core Concepts
+- Spouts
+- Bolts
+- Topologies
+** Basic Topology
+#+BEGIN_SRC dot :file basic-topology.jpg 
+digraph G  {
+  rankdir=LR;
+  graph [bgcolor="transparent"];
+  kafka [shape=box, label = "Kafka"];
+  spout [shape=invhouse, label = "Kafka Spout"];
+  bolt  [label = "Counting Bolt"];
+  kafka -> spout -> bolt;
+};
+#+END_SRC
+
+#+RESULTS:
+[[file:basic-topology.jpg]]
+
+** Complex Topology
+#+BEGIN_SRC dot :file complex-topology.jpg 
+digraph G  {
+  rankdir=LR;
+  graph [bgcolor="transparent"];
+  kafka [shape=box, label = "Kafka"];
+  spout [shape=invhouse, label = "Kafka Spout"];
+  transform [label = "Transform Bolt"];
+  grouper1  [label = "Grouping Bolt"];
+  counter1  [label = "Counting Bolt"];
+  grouper2  [label = "Grouping Bolt"];
+  counter2  [label = "Counting Bolt"];
+  output [label = "Output Bolt"];
+  datastore [label = "Data Store"];
+  kafka -> spout -> transform;
+  transform -> grouper1 -> counter1;
+  transform -> grouper2 -> counter2;
+  counter1 -> output;
+  counter2 -> output;
+  output -> datastore;
+};
+#+END_SRC
+
+#+RESULTS:
+[[file:complex-topology.jpg]]
+
+* What is DataCube?
+#+ATTR_REVEAL: :frag roll-in
+- Calculating multidimensional data
+- Designed for high-volume, suited for streaming
+- Persistent (pluggable, HBase to start)
+- Open-sourced by Urban Airship
+
+* Counting Events
+Count events arriving at your website
+
+#+ATTR_REVEAL: :frag roll-in
+- Counting Events By User
+- Counting Events By User and Browser
+- Counting Events By User and Browser and Geographical Region
+- By Hour
+- By Day
+- By Week
+- ...
+
+* Traditional Approach
+#+ATTR_REVEAL: :frag roll-in
+- Use an RDMBS
+- Star Schema
+- OLAP Data Cube
+- Success and Profit!
+- Batch - Wait for ETL
+- Big Data
+
+* Use Storm!
+
+#+BEGIN_SRC clojure
+  (defbolt event-counting-bolt [event]
+    (count event)
+    (count-username event)
+    (count-username-and-browser event)
+    (count-username-and-browser-and-geoip event))
+#+END_SRC
+
+* Oops, forgot about time
+#+BEGIN_SRC clojure
+  (defbolt event-counting-bolt [event]
+    (count event)
+    (count-username event)
+    (count-username-and-browser event)
+    (count-username-and-browser-and-geoip event)
+    (let [timestamp (:timestamp event)]
+      (count-username (:hour timestamp) event)
+      (count-username (:hour timestamp) event)
+      (count-username-and-browser (:hour timestamp) event)
+      (count-username-and-browser-and-geoip (:hour timestamp) event)))
+#+END_SRC
+
+and so on for day, week, month and year.
+
+* But wait! Just one more rollup
+What operating system version are they using?
+#+ATTR_REVEAL: :frag roll-in
+- Update the bolt and redeploy
+- What about past data?
+
+* Datacube to the Rescue!
+- Declarative
+- Persistent
+- Batch Loading
+* Datacube Core Concepts
+#+ATTR_REVEAL: :frag roll-in
+- Rollups
+- Dimensions
+- Bucketers
+* Rollup
+A Rollup tracks a thing being measured. Rollups may have several dimensions.
+* Dimension
+A Dimension is a single facet of some measure.
+* Bucketer
+A Bucketer sub-divides dimensions.
+e.g. Time can be bucketed into years, months, weeks, days etc
+
+* Example: Tweets Cube
+Count the number of tweets by time, retweets, user and tags.
+* Minimal Tweets Cube
+#+BEGIN_SRC clojure
+  (defcube tweets-cube :long
+    (rollup))
+
+  (write-value tweets-cube 1)
+  (read-value tweents-cube) => 1
+#+END_SRC
+* Tweets Cube with a Dimension
+#+BEGIN_SRC clojure
+  (defcube tweets-cube :long
+    (string-dimension :user)
+    (rollup :user))
+
+  (write-value tweets-cube 1
+    (at :user "bob"))
+
+  (write-value tweets-cube 4
+    (at :user "anne"))
+
+  (read-value tweets-cube
+    (at :user "bob")) => 1
+
+  (read-value tweets-cube
+    (at :user "anne")) => 4
+#+END_SRC
+* Tweets Cube with Mutiple Dimensions
+#+BEGIN_SRC clojure
+  (defcube tweets-cube :long
+    (time-dimension :time)
+    (string-dimension :retweeted-from)
+    (string-dimension :user)
+    (tags-dimension :tags)
+    (rollup)
+    (rollup :user)
+    (rollup :user :time day-bucket)
+    (rollup :retweeted-from)
+    (rollup :user :retweeted-from)
+    (rollup :tags)
+    (rollup :tags :time hour-bucket))
+  
+  (write-value tweets-cube 1
+               (at :time (:time tweet))
+               (at :user (:username tweet))
+               (at :retweeted-from (or (:rt-from tweet) ""))
+               (at :tags (:hash-tags tweet)))
+#+END_SRC
+* The Java API for Writing
+Not too verbose:
+#+BEGIN_SRC java
+	public void countTweet(Tweet tweet) throws IOException, InterruptedException, AsyncException {
+		WriteBuilder writeBuilder = new WriteBuilder(dataCube)
+			.at(timeDimension, tweet.time)
+			.at(userDimension, tweet.username)
+			.at(retweetedFromDimension, tweet.retweetedFrom.or(""))
+		    .at(tagsDimension, tweet.hashTags);
+		Batch<LongOp> cubeUpdates = dataCube.getWrites(writeBuilder, new LongOp(1));
+		
+        dataCubeIo.writeAsync(cubeUpdates);
+    }
+#+END_SRC
+* Under the covers: Performance
+  - Async I/O
+  - Batching
+* Under The Covers: Storage
+Datacube targets a "Big Table" like data storage.
+A persisted cube is just a flattened to Key -> Value
+#+ATTR_REVEAL: :frag roll-in
+- =(rollup :user)=
+  - <username> -> long
+- =(rollup :user :time day-bucket)=
+  - <username>:<date> -> long
+* Under The Covers: efficient keys
+- String dimensions are mapped to an byte array of size N
+  - User defined N
+  - Separate mapping table (cached)
+* Under The Covers: Write Polices
+  - Increment
+  - Overwrite
+  - Read Combine Compare-and-Set
+    - Allows for multiple writers
+    - Tune-able retries 
+* Managing Change
+  - Dimensions and Rollups may be added
+* Bulk Loader (Back-fill)
+#+ATTR_REVEAL: :frag roll-in
+1. Snapshot the live cube
+2. Compute the back-fill (Map/Reduce)
+3. Apply deltas from the snapshot and the live table
+4. Swap
+* Pluggable Persistence
+- Currently HBase Only
+- Other potential targets
+  - Accumulo
+  - Cassandra
+  - DynamoDB
+* This Combination Scales Well
+  - Storm
+  - HBase
+* Other Solutions
+- Twitters Summingbird
+- Cascalog 2.0
+* Questions?
+* Resources
+- https://github.com/urbanairship/datacube
+- https://github.com/bcotton/clj-datacube
+- http://www.slideshare.net/dave_revell/nearrealtime-analytics-with-kafka-and-hbase
+- http://gbif.blogspot.com/2012/07/getting-started-with-datacube-on-hbase.html
+- https://blog.twitter.com/2013/streaming-mapreduce-with-summingbird
